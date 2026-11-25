@@ -23,4 +23,4 @@
 
 [下载最新版本](https://github.com/WOAIXIAOGONG/resource-finder/releases/latest) · [使用说明](使用说明.txt)
 
-本项目为私有仓库，访问和下载需要相应的 GitHub 仓库权限。
+本项目已公开，无需登录 GitHub 即可访问、下载及检查更新。

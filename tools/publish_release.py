@@ -1,4 +1,4 @@
-"""Publish an already tested ZIP to a private repository, draft until digest verified."""
+"""Publish an already tested ZIP, retaining a draft until its digest is verified."""
 import argparse,hashlib,json,re,subprocess,sys,tempfile,zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];sys.path.insert(0,str(ROOT))
@@ -15,7 +15,6 @@ def main():
         return proc.stdout
     def git(*command):return subprocess.check_output(['git',*command],cwd=ROOT,text=True,encoding='utf-8').strip()
     if git('status','--porcelain'):raise SystemExit('源码还有未提交修改，拒绝发布')
-    if not json.loads(gh('repo','view',REPOSITORY,'--json','isPrivate'))['isPrivate']:raise SystemExit('仓库必须是私有仓库')
     if archive.name!='资源搜寻器-%s-win64.zip'%tag:raise SystemExit('ZIP文件名与当前版本不符')
     with zipfile.ZipFile(archive) as z:
         names=z.namelist()
