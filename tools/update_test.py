@@ -29,7 +29,7 @@ class UpdateTests(unittest.TestCase):
         for value in ['latest','3.1','v3.1.0-rc1','../3.2.0']:
             with self.assertRaises(UpdateError):version(value)
         client=ReleaseClient(Settings(),'owner/repo')
-        data={'tag_name':'v3.38.0','assets':[{'name':'资源搜寻器-v3.38.0-win64.zip','state':'uploaded','id':3,'size':10,'digest':'sha256:'+'a'*64}]}
+        data={'tag_name':'v3.38.0','assets':[{'name':'resource-finder-v3.38.0-win64.zip','state':'uploaded','id':3,'size':10,'digest':'sha256:'+'a'*64}]}
         with patch.object(client,'request',side_effect=lambda *_:response(json.dumps(data).encode())):
             self.assertEqual(client.latest('3.37.4')['version'],'3.38.0')
             self.assertIsNone(client.latest('3.38.0'))

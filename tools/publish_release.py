@@ -26,13 +26,16 @@ def main():
     changes=(ROOT/'CHANGELOG.md').read_text(encoding='utf-8')
     notes=changes.split('## ['+APP_VERSION+']',1)[1].split('\n## [',1)[0]
     with tempfile.TemporaryDirectory(prefix='rf-publish-') as folder:
+        import shutil
+        remote_archive=Path(folder)/('resource-finder-%s-win64.zip'%tag)
+        shutil.copyfile(archive,remote_archive)
         note=Path(folder)/'notes.md';note.write_text('资源搜寻器 '+tag+'\n\n'+notes+'\n\nSHA256: `'+digest+'`\n',encoding='utf-8')
         # No --clobber: published assets and prior releases are never overwritten.
         gh('release','create',tag,'--repo',REPOSITORY,'--draft','--target',git('rev-parse','HEAD'),'--title','资源搜寻器 '+tag,'--notes-file',str(note))
-        gh('release','upload',tag,str(archive),'--repo',REPOSITORY)
+        gh('release','upload',tag,str(remote_archive),'--repo',REPOSITORY)
         releases=json.loads(gh('api','repos/'+REPOSITORY+'/releases'))
         release=next(r for r in releases if r['tag_name']==tag)
-        asset=next(a for a in release['assets'] if a['name']==archive.name)
+        asset=next(a for a in release['assets'] if a['name']==remote_archive.name)
         if asset.get('digest')!='sha256:'+digest:raise SystemExit('GitHub文件摘要不匹配，保留草稿，不向用户发布')
         if args.publish:gh('release','edit',tag,'--repo',REPOSITORY,'--draft=false','--latest')
         print(json.dumps(dict(url=release['html_url'],published=args.publish,sha256=digest),ensure_ascii=False))

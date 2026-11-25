@@ -132,7 +132,7 @@ class ReleaseClient:
         if data.get('draft') or data.get('prerelease'):raise UpdateError('更新源不是正式发布')
         tag=data.get('tag_name','');parsed=version(tag)
         if parsed<=version(current):return None
-        ver='.'.join(map(str,parsed));name='资源搜寻器-v%s-win64.zip'%ver
+        ver='.'.join(map(str,parsed));name='resource-finder-v%s-win64.zip'%ver
         assets=[a for a in data.get('assets',[]) if a.get('name')==name and a.get('state')=='uploaded']
         if len(assets)!=1:raise UpdateError('新版尚未提供完整的 Windows 更新包')
         asset=assets[0];digest=asset.get('digest','')
