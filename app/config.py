@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 APP_ID = "ResourceFinder"
 APP_NAME = "资源搜寻器"
 APP_NAME_EN = "Resource Finder"
-APP_VERSION = "3.38.0"
+APP_VERSION = "3.38.1"
 CONFIG_VERSION = 1
 
 

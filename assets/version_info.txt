@@ -1,8 +1,8 @@
 ﻿# UTF-8
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(3, 38, 0, 0),
-    prodvers=(3, 38, 0, 0),
+    filevers=(3, 38, 1, 0),
+    prodvers=(3, 38, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -18,11 +18,11 @@ VSVersionInfo(
           [
             StringStruct('CompanyName', 'Resource Finder'),
             StringStruct('FileDescription', '资源搜寻器 - 白名单站点一键搜索'),
-            StringStruct('FileVersion', '3.38.0.0'),
+            StringStruct('FileVersion', '3.38.1.0'),
             StringStruct('InternalName', 'ResourceFinder'),
             StringStruct('OriginalFilename', '资源搜寻器.exe'),
             StringStruct('ProductName', '资源搜寻器'),
-            StringStruct('ProductVersion', '3.38.0.0')
+            StringStruct('ProductVersion', '3.38.1.0')
           ])
       ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

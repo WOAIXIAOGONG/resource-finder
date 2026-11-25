@@ -3,7 +3,7 @@ import sys
 import threading
 from PySide6.QtCore import QObject, Signal, QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QCheckBox,QHBoxLayout,QLineEdit,QMessageBox,QProgressBar,QPushButton,QTextEdit
+from PySide6.QtWidgets import QCheckBox,QHBoxLayout,QMessageBox,QProgressBar,QPushButton,QTextEdit
 from .dialog_design import StyledDialog,label,primary
 from ..config import APP_VERSION
 from ..updates import UpdateSettings,ReleaseClient,prepare_update,launch_update,UpdateError,UpdateCancelled
@@ -23,46 +23,24 @@ class UpdateDialog(StyledDialog):
         cancel=self.cancel;self.destroyed.connect(lambda:cancel.set())
         root=self.make_root('软件更新','当前版本 '+APP_VERSION+' · 用户确认后才会替换程序','refresh',650)
         self.status=label('通过 GitHub 检查正式发布版本');root.addWidget(self.status)
-        self.notes=QTextEdit(self);self.notes.setReadOnly(True);self.notes.setMinimumHeight(130);root.addWidget(self.notes)
+        self.notes=QTextEdit(self);self.notes.setReadOnly(True);self.notes.setMinimumHeight(130);root.addWidget(self.notes);self.notes.hide()
         self.progress=QProgressBar(self);self.progress.hide();root.addWidget(self.progress)
         self.auto=QCheckBox('启动时自动检查新版本',self);self.auto.setChecked(self.store.automatic)
         self.auto.toggled.connect(self.save_automatic);root.addWidget(self.auto)
-        self.auth=QPushButton('私有仓库访问授权',self);self.auth.setCheckable(True);root.addWidget(self.auth)
-        from PySide6.QtWidgets import QWidget,QVBoxLayout
-        self.auth_panel=QWidget(self);auth_layout=QVBoxLayout(self.auth_panel);auth_layout.setContentsMargins(0,0,0,0)
-        auth_layout.addWidget(label('访问私有仓库需要该仓库的权限。填写只读令牌（Contents: Read），授权仅加密保存在当前 Windows 用户本机，不随工具分发。'))
-        self.repo=QLineEdit(self.store.repository,self);self.repo.setPlaceholderText('owner/repository')
-        from ..update_channel import REPOSITORY
-        self.repo.setReadOnly(bool(REPOSITORY));auth_layout.addWidget(self.repo)
-        self.token=QLineEdit(self);self.token.setEchoMode(QLineEdit.EchoMode.Password);self.token.setPlaceholderText('GitHub 访问令牌（不填写密码；留空保留已有授权）');auth_layout.addWidget(self.token)
-        auth_buttons=QHBoxLayout()
-        self.auth_link=QPushButton('创建只读令牌',self)
-        self.auth_link.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/settings/personal-access-tokens/new')))
-        self.auth_save=QPushButton('保存并检查',self);self.auth_save.clicked.connect(self.save_auth)
-        self.auth_clear=QPushButton('清除授权',self);self.auth_clear.clicked.connect(self.clear_auth)
-        for b in (self.auth_link,self.auth_save,self.auth_clear):auth_buttons.addWidget(b)
-        auth_layout.addLayout(auth_buttons);root.addWidget(self.auth_panel);self.auth_panel.hide()
-        self.auth.toggled.connect(self.auth_panel.setVisible)
         buttons=QHBoxLayout();self.close_button=QPushButton('暂不更新',self);self.close_button.clicked.connect(self.reject)
         self.check_button=QPushButton('重新检查',self);self.check_button.clicked.connect(self.check)
         self.install_button=QPushButton('下载并更新',self);primary(self.install_button);self.install_button.setEnabled(False);self.install_button.clicked.connect(self.install)
-        for b in (self.close_button,self.check_button,self.install_button):buttons.addWidget(b)
+        self.download_page=QPushButton('打开下载页',self)
+        self.download_page.clicked.connect(lambda:QDesktopServices.openUrl(QUrl('https://github.com/'+self.store.repository+'/releases/latest')))
+        for b in (self.close_button,self.download_page,self.check_button,self.install_button):buttons.addWidget(b)
         self.finish_layout(root,buttons)
 
     def save_automatic(self,value):
         try:self.store.save(automatic=value)
         except Exception:self.status.setText('无法保存自动检查设置')
-    def save_auth(self):
-        try:
-            self.store.save(repository=self.repo.text(),token=self.token.text().strip() or None)
-            self.token.clear();self.check()
-        except Exception as exc:self.status.setText(str(exc))
-    def clear_auth(self):
-        try:self.store.save(token='');self.token.clear();self.status.setText('本机授权已清除')
-        except Exception:self.status.setText('无法清除授权')
     def set_busy(self,value):
         self.busy=value
-        for button in (self.check_button,self.auth_save,self.auth_clear):button.setEnabled(not value)
+        for button in (self.check_button,):button.setEnabled(not value)
         self.install_button.setEnabled(not value and bool(self.release))
     def work(self,kind,fn):
         self.set_busy(True);self.cancel.clear()
@@ -76,9 +54,9 @@ class UpdateDialog(StyledDialog):
         threading.Thread(target=run,name='release-'+kind,daemon=True).start()
     def check(self):
         if self.busy:return
-        self.release=None;self.status.setText('正在检查 GitHub 新版本…');self.progress.hide()
+        self.release=None;self.notes.hide();self.status.setText('正在检查 GitHub 公开发布…');self.progress.hide()
         def run():
-            client=ReleaseClient(self.settings,self.store.repository,self.store.token(),self.cancel)
+            client=ReleaseClient(self.settings,self.store.repository,'',self.cancel)
             try:return client.latest()
             finally:client.close()
         self.work('checked',run)
@@ -89,7 +67,7 @@ class UpdateDialog(StyledDialog):
         if answer!=QMessageBox.StandardButton.Yes:return
         self.status.setText('正在下载和校验更新包…');self.progress.setRange(0,100);self.progress.setValue(0);self.progress.show()
         release=dict(self.release)
-        self.work('prepared',lambda:prepare_update(self.settings,release,self.store.token(),self.store.repository,cancel=self.cancel,
+        self.work('prepared',lambda:prepare_update(self.settings,release,'',self.store.repository,cancel=self.cancel,
                   progress=lambda a,b:self.signals.progress.emit(a,b)))
     def on_progress(self,received,total):
         self.progress.setValue(int(received*100/max(1,total)))
@@ -99,9 +77,12 @@ class UpdateDialog(StyledDialog):
         if self.cancel.is_set():return
         if kind=='checked':
             self.release=result
+            if hasattr(self.parent(),'update_btn'):
+                self.parent().update_btn.setText('发现新版 · '+result['version'] if result else '检查更新 · '+APP_VERSION)
+                self.parent().update_btn.setToolTip('发现可用更新' if result else '已完成版本检查')
             if result:
                 self.status.setText('发现新版本 '+result['version']);self.notes.setPlainText(result['notes'] or '此版本没有附加说明。')
-                self.install_button.setEnabled(True);self.show();self.raise_()
+                self.notes.show();self.install_button.setEnabled(True);self.show();self.raise_()
             else:self.status.setText('当前已是最新正式版本 '+APP_VERSION)
         elif kind=='prepared':
             try:
@@ -112,7 +93,8 @@ class UpdateDialog(StyledDialog):
         else:
             self.status.setText(result)
             parent=self.parent()
-            if parent and hasattr(parent,'update_btn'):parent.update_btn.setToolTip(result)
+            if parent and hasattr(parent,'update_btn'):
+                parent.update_btn.setText('检查更新 · 暂不可用');parent.update_btn.setToolTip(result)
         if self.automatic and not self.isVisible():self.automatic=False
     def reject(self):
         self.cancel.set();super().reject()

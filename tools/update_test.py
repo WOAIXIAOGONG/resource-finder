@@ -7,7 +7,7 @@ from unittest.mock import patch,Mock
 import requests
 from app.config import Settings
 from app.updates import (ReleaseClient,UpdateError,UpdateCancelled,UpdateSettings,version,sha,
-    write_manifest,verify_stage,stage_archive,apply_files,EXE)
+    write_manifest,verify_stage,stage_archive,apply_files,EXE,UpdateHTTPError)
 
 def fixture(root,ver='3.38.0',payload='new'):
     root.mkdir();(root/EXE).write_text(payload);(root/'_internal').mkdir();(root/'_internal'/'runtime').write_text(payload)
@@ -17,6 +17,63 @@ def response(body=b'',status=200,headers=None):
     r=requests.Response();r.status_code=status;r.headers.update(headers or {});r.raw=io.BytesIO(body);return r
 
 class UpdateTests(unittest.TestCase):
+    def setUp(self):ReleaseClient._api_cooldowns.clear()
+    def tearDown(self):ReleaseClient._api_cooldowns.clear()
+    def public_feed(self):
+        return dict(schema=1,repository='owner/repo',version='3.38.1',name='resource-finder-v3.38.1-win64.zip',
+                    url='https://github.com/owner/repo/releases/download/v3.38.1/resource-finder-v3.38.1-win64.zip',
+                    size=3,sha256='a'*64,notes='fixture')
+    def test_public_manifest_does_not_need_api_or_authorization(self):
+        client=ReleaseClient(Settings(),'owner/repo','stale-credential');calls=[]
+        def get(url,**kwargs):
+            calls.append((url,kwargs));self.assertNotIn('api.github.com',url)
+            self.assertNotIn('Authorization',kwargs['headers'])
+            return response(json.dumps(self.public_feed()).encode())
+        with patch.object(client.session,'get',side_effect=get):
+            self.assertEqual(client.latest('3.38.0')['channel'],'public')
+            self.assertIsNone(client.latest('3.38.1'))
+        self.assertEqual(len(calls),2);client.close()
+    def test_public_feed_rejects_other_repository_url_and_missing_hash(self):
+        client=ReleaseClient(Settings(),'owner/repo')
+        for key,value in [('repository','evil/repo'),('url','https://evil.test/a.zip'),('sha256',''),('size',True)]:
+            data=self.public_feed();data[key]=value
+            with patch.object(client,'read_json',return_value=data),self.assertRaises(UpdateError):client.public_latest('3.38.0')
+        client.close()
+    def test_missing_public_feed_falls_back_to_older_api_release(self):
+        client=ReleaseClient(Settings(),'owner/repo');data={'tag_name':'v3.38.0','assets':[{'name':'resource-finder-v3.38.0-win64.zip','state':'uploaded','id':3,'size':10,'digest':'sha256:'+'a'*64}]}
+        with patch.object(client.session,'get',side_effect=[response(status=404),response(json.dumps(data).encode())]) as get:
+            self.assertEqual(client.latest('3.37.4')['asset_id'],3);self.assertEqual(get.call_count,2)
+        client.close()
+    def test_private_or_missing_release_is_not_reported_as_up_to_date(self):
+        client=ReleaseClient(Settings(),'owner/repo')
+        with patch.object(client.session,'get',side_effect=lambda *_args,**_kw:response(status=404)),self.assertRaises(UpdateHTTPError) as error:client.latest('3.38.0')
+        self.assertEqual(error.exception.kind,'unavailable');self.assertIn('可能已转为私有',str(error.exception));client.close()
+    def test_visibility_change_does_not_reuse_old_public_result(self):
+        client=ReleaseClient(Settings(),'owner/repo')
+        with patch.object(client.session,'get',side_effect=[response(json.dumps(self.public_feed()).encode()),response(status=404),response(status=404)]):
+            self.assertIsNotNone(client.latest('3.38.0'))
+            with self.assertRaises(UpdateHTTPError) as error:client.latest('3.38.0')
+            self.assertEqual(error.exception.kind,'unavailable')
+        client.close()
+    def test_rate_limit_has_distinct_message_and_api_cooldown(self):
+        client=ReleaseClient(Settings(),'owner/repo')
+        with patch.object(client.session,'get',return_value=response(b'{"message":"API rate limit exceeded"}',403,{'X-RateLimit-Remaining':'0','Retry-After':'120'})) as get:
+            for _ in range(2):
+                with self.assertRaises(UpdateHTTPError) as error:client.request('https://api.github.com/repos/owner/repo/releases/latest')
+                self.assertEqual(error.exception.kind,'rate_limit');self.assertIn('受限',str(error.exception))
+            self.assertEqual(get.call_count,1)
+        client.close()
+    def test_generic_403_does_not_assert_private_repository(self):
+        client=ReleaseClient(Settings(),'owner/repo')
+        with patch.object(client.session,'get',return_value=response(b'Forbidden',403)),self.assertRaises(UpdateHTTPError) as error:client.request('https://api.github.com/test')
+        self.assertEqual(error.exception.kind,'forbidden');self.assertIn('尚不能判断',str(error.exception));client.close()
+    def test_public_download_retains_hash_verification(self):
+        import hashlib
+        client=ReleaseClient(Settings(),'owner/repo');data=self.public_feed();data.update(channel='public',sha256=hashlib.sha256(b'abc').hexdigest())
+        with tempfile.TemporaryDirectory() as folder,patch.object(client,'request',return_value=response(b'abc')) as request:
+            target=Path(folder)/'update.zip';client.download(data,target)
+            self.assertEqual(target.read_bytes(),b'abc');self.assertIn('github.com/owner/repo/releases/download/',request.call_args.args[0])
+        client.close()
     def test_corrupt_local_settings_do_not_break_startup(self):
         with tempfile.TemporaryDirectory() as folder:
             store=UpdateSettings(folder);store.path.parent.mkdir(parents=True,exist_ok=True)
@@ -114,6 +171,13 @@ class UpdateUITests(unittest.TestCase):
     tearDownClass=classmethod(AccessUITests.tearDownClass.__func__)
     setUp=AccessUITests.setUp
     tearDown=AccessUITests.tearDown
+    def test_public_ui_does_not_read_saved_credentials(self):
+        from app.ui.updates import UpdateDialog
+        dialog=UpdateDialog(self.win)
+        with patch.object(dialog.store,'token',side_effect=UpdateError('old encrypted credential')) as token,patch('app.ui.updates.ReleaseClient') as client,patch.object(dialog,'work',side_effect=lambda kind,fn:fn()):
+            client.return_value.latest.return_value=None;dialog.check()
+            token.assert_not_called();self.assertEqual(client.call_args.args[2],'')
+        self.assertFalse(hasattr(dialog,'auth_panel'));self.assertEqual(dialog.download_page.text(),'打开下载页')
     def test_manual_button_and_skip_never_install(self):
         from app.ui.updates import UpdateDialog
         with patch.object(UpdateDialog,'check') as check:
@@ -127,6 +191,7 @@ class UpdateUITests(unittest.TestCase):
         from app.ui.updates import UpdateDialog
         dialog=UpdateDialog(self.win,True);dialog.finished_work('error','fixture offline')
         self.assertFalse(dialog.isVisible());self.assertIn('fixture offline',self.win.update_btn.toolTip())
+        self.assertIn('暂不可用',self.win.update_btn.text())
 
 del AccessUITests
 if __name__=='__main__':unittest.main(verbosity=2)

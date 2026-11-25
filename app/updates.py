@@ -30,6 +30,9 @@ MAX_EXPANDED = 3*1024**3
 
 class UpdateError(Exception): pass
 class UpdateCancelled(UpdateError): pass
+class UpdateHTTPError(UpdateError):
+    def __init__(self,message,status,kind='http'):
+        super().__init__(message);self.status=status;self.kind=kind
 
 def version(value):
     match = re.fullmatch(r'v?(\d+)\.(\d+)\.(\d+)', str(value))
@@ -89,11 +92,13 @@ class UpdateSettings:
         atomic_json(self.path,data);self.data=data
 
 class ReleaseClient:
+    _api_cooldowns={}
     def __init__(self, settings, repository, token='', cancel=None):
         if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+',repository):raise UpdateError('尚未配置有效的 GitHub 更新仓库')
         self.repository=repository;self.token=token;self.cancel=cancel or threading.Event()
         self.session=requests.Session();self.session.trust_env=False
         proxy=detect_proxy(settings)
+        self._route=proxy or 'direct'
         if proxy:self.session.proxies={'http':proxy,'https':proxy}
     def close(self):self.session.close()
     def check_cancel(self):
@@ -104,8 +109,10 @@ class ReleaseClient:
             self.check_cancel();parts=urlsplit(url)
             if parts.scheme!='https' or parts.username or parts.password or parts.port not in (None,443):raise UpdateError('更新地址不安全')
             host=parts.hostname
-            if host not in ('api.github.com','release-assets.githubusercontent.com','objects.githubusercontent.com'):
+            if host not in ('github.com','api.github.com','release-assets.githubusercontent.com','objects.githubusercontent.com'):
                 raise UpdateError('拒绝非 GitHub 官方下载地址')
+            if host=='api.github.com' and self._api_cooldowns.get((self._route,bool(self.token)),0)>time.time():
+                raise UpdateHTTPError('GitHub API 请求额度暂时受限，请稍后再试；这不代表仓库已转为私有。',403,'rate_limit')
             headers={'Accept':'application/octet-stream' if binary else 'application/vnd.github+json',
                      'User-Agent':'ResourceFinder/'+APP_VERSION,'X-GitHub-Api-Version':'2022-11-28'}
             if host=='api.github.com' and self.token:headers['Authorization']='Bearer '+self.token
@@ -114,21 +121,65 @@ class ReleaseClient:
             if r.status_code in (301,302,303,307,308):
                 url=r.headers.get('Location','');r.close();continue
             if r.status_code!=200:
-                code=r.status_code;r.close()
-                if code in (401,403,404):raise UpdateError('无法访问私有发布：请检查仓库权限、访问令牌，或确认已有正式 Release（HTTP %d）'%code)
-                raise UpdateError('GitHub 请求失败（HTTP %d）'%code)
+                code=r.status_code;headers=r.headers;body=b''
+                try:
+                    for block in r.iter_content(1024):
+                        body+=block
+                        if len(body)>=4096:break
+                except requests.RequestException:pass
+                finally:r.close()
+                limited=code==429 or headers.get('X-RateLimit-Remaining')=='0' or b'rate limit' in body.lower()
+                if limited:
+                    until=time.time()+60
+                    for header,relative in [('Retry-After',True),('X-RateLimit-Reset',False)]:
+                        try:
+                            value=float(headers.get(header,''));until=max(until,time.time()+value if relative else value)
+                        except (ValueError,TypeError):pass
+                    if host=='api.github.com':self._api_cooldowns[(self._route,bool(self.token))]=until
+                    wait=max(1,int((until-time.time()+59)//60))
+                    raise UpdateHTTPError('GitHub 请求额度暂时受限（HTTP %d），请约 %d 分钟后重试；共享代理出口也可能触发限流，并非仓库私有。'%(code,wait),code,'rate_limit')
+                if code==404:raise UpdateHTTPError('更新源目前无法公开访问（HTTP 404）：可能已转为私有、被移除，或尚无公开发布。暂时无法更新，当前版本仍可使用。',code,'unavailable')
+                if code==401:raise UpdateHTTPError('GitHub 拒绝了请求授权（HTTP 401），暂时无法检查更新。',code,'authorization')
+                if code==403:raise UpdateHTTPError('GitHub 拒绝了更新请求（HTTP 403），可能是访问策略或代理出口限制；尚不能判断仓库可见性。可在浏览器打开下载页核查。',code,'forbidden')
+                raise UpdateHTTPError('GitHub 请求失败（HTTP %d），暂时无法检查更新。'%code,code)
             return r
         raise UpdateError('GitHub 下载重定向次数过多')
-    def latest(self, current=APP_VERSION):
-        with self.request('https://api.github.com/repos/'+self.repository+'/releases/latest') as r:
+    def read_json(self,url):
+        with self.request(url) as r:
             chunks=[];size=0
             for chunk in r.iter_content(65536):
-                size+=len(chunk)
+                self.check_cancel();size+=len(chunk)
                 if size>2*1024*1024:raise UpdateError('版本信息过大')
                 chunks.append(chunk)
-            body=b''.join(chunks)
-        try:data=json.loads(body)
+        try:data=json.loads(b''.join(chunks))
         except ValueError:raise UpdateError('GitHub 版本信息无法解析') from None
+        if not isinstance(data,dict):raise UpdateError('GitHub 版本信息格式无效')
+        return data
+    def public_latest(self,current):
+        data=self.read_json('https://github.com/'+self.repository+'/releases/latest/download/update-info.json')
+        if data.get('schema')!=1 or data.get('repository')!=self.repository:raise UpdateError('公开更新清单与当前仓库不一致')
+        ver='.'.join(map(str,version(data.get('version'))))
+        name='resource-finder-v%s-win64.zip'%ver
+        expected='https://github.com/%s/releases/download/v%s/%s'%(self.repository,ver,name)
+        if data.get('name')!=name or data.get('url')!=expected:raise UpdateError('公开更新清单的下载地址无效')
+        if not re.fullmatch('[0-9a-f]{64}',str(data.get('sha256',''))):raise UpdateError('公开更新清单缺少 SHA256 校验')
+        if type(data.get('size')) is not int or not 0<data['size']<=MAX_ZIP:raise UpdateError('公开更新包大小无效')
+        if version(ver)<=version(current):return None
+        return dict(version=ver,name=name,url=expected,size=data['size'],sha256=data['sha256'],notes=str(data.get('notes') or '')[:12000],channel='public')
+    def latest(self, current=APP_VERSION):
+        try:return self.public_latest(current)
+        except UpdateCancelled:raise
+        except UpdateError as public_error:
+            # Older releases may lack the public manifest. Consult API once;
+            # rate-limited API calls are held until their server-specified reset.
+            try:return self.api_latest(current)
+            except UpdateCancelled:raise
+            except UpdateHTTPError as api_error:
+                if api_error.kind=='unavailable' and not (isinstance(public_error,UpdateHTTPError) and public_error.kind=='unavailable'):
+                    raise public_error from None
+                raise api_error from None
+    def api_latest(self, current=APP_VERSION):
+        data=self.read_json('https://api.github.com/repos/'+self.repository+'/releases/latest')
         if data.get('draft') or data.get('prerelease'):raise UpdateError('更新源不是正式发布')
         tag=data.get('tag_name','');parsed=version(tag)
         if parsed<=version(current):return None
@@ -143,7 +194,11 @@ class ReleaseClient:
     def download(self, release, destination, progress=lambda *_:None):
         destination=Path(destination);count=0;digest=hashlib.sha256()
         try:
-            url='https://api.github.com/repos/%s/releases/assets/%d'%(self.repository,release['asset_id'])
+            if release.get('channel')=='public':
+                expected='https://github.com/%s/releases/download/v%s/resource-finder-v%s-win64.zip'%(self.repository,release['version'],release['version'])
+                if release.get('url')!=expected:raise UpdateError('公开更新下载地址校验失败')
+                url=expected
+            else:url='https://api.github.com/repos/%s/releases/assets/%d'%(self.repository,release['asset_id'])
             with self.request(url,True) as r,destination.open('xb') as f:
                 for chunk in r.iter_content(256*1024):
                     self.check_cancel()

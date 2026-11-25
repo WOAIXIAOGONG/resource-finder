@@ -36,6 +36,15 @@ def main():
         release=next(r for r in releases if r['tag_name']==tag)
         asset=next(a for a in release['assets'] if a['name']==remote_archive.name)
         if asset.get('digest')!='sha256:'+digest:raise SystemExit('GitHub文件摘要不匹配，保留草稿，不向用户发布')
+        feed=Path(folder)/'update-info.json'
+        feed.write_text(json.dumps(dict(schema=1,repository=REPOSITORY,version=APP_VERSION,
+            name=remote_archive.name,size=archive.stat().st_size,sha256=digest,
+            url='https://github.com/%s/releases/download/%s/%s'%(REPOSITORY,tag,remote_archive.name),
+            notes=notes.strip()),ensure_ascii=False,indent=2),encoding='utf-8')
+        gh('release','upload',tag,str(feed),'--repo',REPOSITORY)
+        assets=json.loads(gh('api','repos/'+REPOSITORY+'/releases/'+str(release['id'])+'/assets'))
+        feed_asset=next(a for a in assets if a['name']=='update-info.json')
+        if feed_asset.get('digest')!='sha256:'+hashlib.sha256(feed.read_bytes()).hexdigest():raise SystemExit('公开更新清单摘要不匹配，保留草稿')
         if args.publish:gh('release','edit',tag,'--repo',REPOSITORY,'--draft=false','--latest')
         print(json.dumps(dict(url=release['html_url'],published=args.publish,sha256=digest),ensure_ascii=False))
     return 0
