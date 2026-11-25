@@ -957,14 +957,6 @@ def _run_selftest(out_path: str) -> int:
 
 
 def main() -> int:
-    if '--apply-update' in sys.argv:
-        from app.updates import apply_update
-        try:return apply_update(_arg_value(sys.argv,'--apply-update'))
-        except Exception as exc:
-            if os.name=='nt':
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(None,'更新无法开始，现有程序未替换。\n'+str(exc),'资源搜寻器更新',0x10)
-            return 1
     if '--update-healthcheck' in sys.argv:
         from app.config import APP_VERSION
         from app.updates import verify_stage

@@ -239,11 +239,19 @@ def prepare_update(settings, release, token, repository, install=None, cancel=No
         shutil.rmtree(work,ignore_errors=True);raise
     finally:client.close()
 
-def apply_files(target, stage, backup, expected, healthcheck):
+def apply_files(target, stage, backup, expected, healthcheck, progress=lambda *_:None):
     """Replace only managed roots. Record renames so failure can reverse them."""
     target=Path(target).resolve();stage=Path(stage).resolve();backup=Path(backup).resolve()
     if target==stage or target in stage.parents or stage in target.parents:raise UpdateError('更新目录不能与安装目录嵌套')
     verify_stage(stage,expected)
+    def copy_file(src,dst):
+        # Stream explicitly instead of Windows CopyFile2: DLL copies can stall
+        # under file-system filters while the updater is itself a frozen EXE.
+        progress('copying',Path(src).relative_to(stage).as_posix())
+        with open(src,'rb') as source,open(dst,'xb') as output:
+            shutil.copyfileobj(source,output,1024*1024)
+        shutil.copystat(src,dst)
+        return dst
     backup.mkdir(exist_ok=False);moved=[];installed=[]
     names=sorted({p.name for p in stage.iterdir()})
     for name in names:
@@ -251,14 +259,17 @@ def apply_files(target, stage, backup, expected, healthcheck):
         if path.is_symlink() or (path.exists() and getattr(path.stat(),'st_file_attributes',0)&0x400):raise UpdateError('安装目录存在链接，停止更新')
     try:
         for name in names:
+            progress('replacing',name)
             old=target/name
             if old.exists():os.replace(old,backup/name);moved.append(name)
             # The updater itself executes from stage, so COPY instead of moving its files.
             src=stage/name
             installed.append(name)
-            if src.is_dir():shutil.copytree(src,old)
-            else:shutil.copy2(src,old)
+            if src.is_dir():shutil.copytree(src,old,copy_function=copy_file)
+            else:copy_file(src,old)
+        progress('checking','')
         healthcheck(target)
+        progress('verified','')
     except BaseException:
         for name in reversed(installed):
             path=target/name
@@ -267,47 +278,11 @@ def apply_files(target, stage, backup, expected, healthcheck):
         for name in reversed(moved):os.replace(backup/name,target/name)
         raise
 
-def apply_update(plan_path):
-    plan_path=Path(plan_path).resolve();work=plan_path.parent
-    plan=json.loads(plan_path.read_text(encoding='utf-8'));target=Path(plan['target']).resolve();stage=Path(plan['stage']).resolve()
-    if plan.get('schema')!=1 or not work.name.startswith('.resourcefinder-update-') or stage!=work/'stage' or target.parent!=work.parent or target==work:
-        raise UpdateError('更新计划路径校验失败')
-    if not getattr(sys,'frozen',False) or Path(sys.executable).resolve()!=stage/EXE:raise UpdateError('必须通过已校验的独立更新程序运行')
-    receipt=local_home(target)/'last-update.json'
-    parent=plan.get('parent');version(plan['version'])
-    from .agent_liveness import process_identity
-    deadline=time.monotonic()+90
-    while parent and process_identity(parent[0]) is not None and list(process_identity(parent[0]) or ())==parent:
-        if time.monotonic()>deadline:raise UpdateError('原程序未退出，本次更新未执行')
-        time.sleep(.2)
-    options={'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {}
-    options['env']=dict(os.environ,PYINSTALLER_RESET_ENVIRONMENT='1')
-    def health(root):
-        result=subprocess.run([str(root/EXE),'--update-healthcheck',plan['version']],cwd=root,timeout=40,**options)
-        if result.returncode:raise UpdateError('新版启动检查失败，已回退旧版')
-    lock=None
-    try:
-        import msvcrt
-        lock=(target/'.update.lock').open('a+b')
-        if lock.tell()==0:lock.write(b'0');lock.flush()
-        lock.seek(0)
-        msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
-        apply_files(target,stage,work/'backup',plan['version'],health)
-        atomic_json(receipt,dict(ok=True,version=plan['version'],backup=str(work/'backup')))
-        if plan.get('restart',True):subprocess.Popen([str(target/EXE)],cwd=target,**options)
-        return 0
-    except Exception as exc:
-        atomic_json(receipt,dict(ok=False,error=str(exc),backup=str(work/'backup')))
-        if os.name=='nt':
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(None,'更新未完成，已尝试回退旧程序。\n'+str(exc),'资源搜寻器更新',0x10)
-        return 1
-    finally:
-        if lock:lock.close()
-
 def launch_update(plan):
     data=json.loads(Path(plan).read_text(encoding='utf-8'))
     if os.name!='nt':raise UpdateError('自动更新仅支持 Windows 成品版')
-    return subprocess.Popen([str(Path(data['stage'])/EXE),'--apply-update',str(plan)],
+    shell=Path(os.environ.get('SystemRoot',r'C:\Windows'))/'System32/WindowsPowerShell/v1.0/powershell.exe'
+    return subprocess.Popen([str(shell),'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+                            '-File',str(Path(data['stage'])/'assets/update-install.ps1'),'-PlanPath',str(plan)],
                             creationflags=subprocess.CREATE_NO_WINDOW,close_fds=True,
                             env=dict(os.environ,PYINSTALLER_RESET_ENVIRONMENT='1'))
