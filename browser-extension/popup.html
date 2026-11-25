@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>连接资源搜寻器</title>
+<style>
+body{width:340px;margin:0;padding:22px;background:#181b21;color:#eef0f6;font:14px/1.6 system-ui}
+h1{font-size:18px;margin:0 0 12px}p{color:#b6bdcd}textarea{box-sizing:border-box;width:100%;height:82px;background:#222732;color:#eef0f6;border:1px solid #424b60;border-radius:8px;padding:10px;resize:vertical}
+button{border:0;border-radius:8px;padding:10px 16px;margin:12px 8px 0 0;background:#7c98ff;color:#101522;cursor:pointer}button.secondary{background:#303746;color:#dce2ef}#status{margin-top:14px;overflow-wrap:anywhere}
+</style></head><body>
+<h1>连接资源搜寻器</h1>
+<p>在常用浏览器登录后，回到工具点击“已登录”。浏览器连接助手会自动完成配对，无需粘贴连接信息。</p>
+<div id="status" role="status">正在检查连接…</div>
+<button id="disconnect" class="secondary">断开连接</button>
+<details><summary style="margin-top:16px;cursor:pointer;color:#aab9d9">手动连接（兼容旧版工具）</summary>
+<textarea id="pair" placeholder="粘贴工具提供的连接信息" spellcheck="false" aria-label="浏览器连接信息"></textarea>
+<button id="connect">连接工具</button></details>
+<button id="aigei" class="secondary">启用爱给播放提取</button><div id="aigei-status" role="status"></div>
+<p>YouTube：自行登录后回到工具点击“已登录”。爱给：启用上方选项，打开目标资源并正常播放一次，再重新解析。仅读取目标播放器的地址和时长，不导出密码或 Cookie，不启动录音。</p>
+<script src="popup.js"></script></body></html>

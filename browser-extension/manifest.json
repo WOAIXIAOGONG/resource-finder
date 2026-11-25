@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "资源搜寻器 · 浏览器连接",
+  "version": "3.32.0",
+  "description": "连接本机资源搜寻器，复用 YouTube 搜索页面；可选识别爱给网正常播放音频。不导出 Cookie。",
+  "minimum_chrome_version": "116",
+  "permissions": ["scripting", "storage"],
+  "host_permissions": ["https://www.youtube.com/*", "http://127.0.0.1/*"],
+  "optional_host_permissions": ["https://www.aigei.com/*", "https://aigei.com/*"],
+  "background": {"service_worker": "worker.js"},
+  "content_scripts": [{"matches": ["http://127.0.0.1/*"], "js": ["pairing.js"], "run_at": "document_idle", "all_frames": false}],
+  "action": {"default_popup": "popup.html", "default_title": "连接资源搜寻器"}
+}

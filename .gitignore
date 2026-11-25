@@ -1,0 +1,23 @@
+# Runtime, private local saves, credentials and validation never belong in Git.
+.venv/
+dist/
+build/
+.validation/
+_internal/
+profiles/
+data/
+downloads/
+shots/
+__pycache__/
+*.py[cod]
+*.exe
+*.dll
+*.zip
+*.log
+*.part
+*.tmp
+.env*
+*.token
+*.secret
+.update.lock
+.resourcefinder-update-*/

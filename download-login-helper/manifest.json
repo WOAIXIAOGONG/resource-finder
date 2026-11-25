@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "资源搜寻器 · 下载登录助手",
+  "version": "1.0.0",
+  "description": "仅在你点击导出后，将所选平台的登录Cookie保存到本机文件，供资源搜寻器下载使用。无远程服务器。",
+  "permissions": ["cookies", "downloads"],
+  "host_permissions": ["https://*.youtube.com/*", "https://*.bilibili.com/*", "https://*.pixiv.net/*"],
+  "action": {"default_popup": "popup.html", "default_title": "导出下载登录文件"}
+}
